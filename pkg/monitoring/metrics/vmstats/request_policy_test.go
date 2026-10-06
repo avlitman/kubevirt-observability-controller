@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k6tv1 "kubevirt.io/api/core/v1"
 )
 
@@ -31,6 +32,11 @@ func vmiWithOSID(id string) *k6tv1.VirtualMachineInstance {
 			GuestOSInfo: k6tv1.VirtualMachineInstanceGuestOSInfo{ID: id},
 		},
 	}
+}
+
+func now() *metav1.Time {
+	t := metav1.Now()
+	return &t
 }
 
 var _ = Describe("resolveVMStatsRequest", func() {
@@ -122,6 +128,44 @@ var _ = Describe("resolveVMStatsRequest", func() {
 		Expect(req.GuestGetUsers).ToNot(BeNil())
 		Expect(req.GuestGetDevices).ToNot(BeNil())
 	})
+
+	It("drops only dirtyRate while a live migration is active", func() {
+		now := metav1.Now()
+		vmi := vmiWithOSID("rhel")
+		vmi.Status.Phase = k6tv1.Running
+		vmi.Status.MigrationState = &k6tv1.VirtualMachineInstanceMigrationState{
+			StartTimestamp: &now,
+		}
+
+		req := NewRequestPolicy(nil).Resolve(vmi, "8.2.0")
+
+		Expect(req.DirtyRate).To(BeNil())
+		Expect(req.DomainStats).ToNot(BeNil())
+		Expect(req.GuestGetHostName).ToNot(BeNil())
+		Expect(req.GuestGetFsInfo).ToNot(BeNil())
+	})
+
+	DescribeTable("keeps dirtyRate once the migration is no longer active",
+		func(state *k6tv1.VirtualMachineInstanceMigrationState) {
+			vmi := vmiWithOSID("rhel")
+			vmi.Status.Phase = k6tv1.Running
+			vmi.Status.MigrationState = state
+
+			req := NewRequestPolicy(nil).Resolve(vmi, "8.2.0")
+
+			Expect(req.DirtyRate).ToNot(BeNil())
+		},
+		Entry("no migration state", nil),
+		Entry("migration has not started", &k6tv1.VirtualMachineInstanceMigrationState{}),
+		Entry("migration completed", &k6tv1.VirtualMachineInstanceMigrationState{
+			StartTimestamp: now(),
+			Completed:      true,
+		}),
+		Entry("migration failed", &k6tv1.VirtualMachineInstanceMigrationState{
+			StartTimestamp: now(),
+			Failed:         true,
+		}),
+	)
 })
 
 var _ = Describe("RequestPolicy.Resolve under a restricted allowlist", func() {

@@ -117,6 +117,11 @@ func (p *RequestPolicy) Enabled() bool {
 func (p *RequestPolicy) Resolve(vmi *k6tv1.VirtualMachineInstance, agentVer string) *VMStatsRequest {
 	set := make(map[category]bool)
 	p.addCategories(set, libvirtCategories)
+	// StartDirtyRateCalc conflicts with an active migration. KubeVirt skips
+	// only dirty-rate stats in that case; the other categories stay.
+	if isActivelyMigrating(vmi) {
+		delete(set, catDirtyRate)
+	}
 
 	id := strings.ToLower(strings.TrimSpace(vmi.Status.GuestOSInfo.ID))
 	if id == "" {
